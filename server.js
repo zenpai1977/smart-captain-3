@@ -61,7 +61,7 @@ const htmlPage = `<!DOCTYPE html>
     </div>
 
     <div class="card">
-      <h2>1. Aapke Ride Filter Rules (Demo Control)</h2>
+      <h2>1. Aapke Ride Filter Rules</h2>
       <div class="row"><span>Bike / Auto / Cab / Parcel Switch</span><input type="checkbox" id="serviceSwitch" checked></div>
       <div class="row"><span>Minimum Trip Doori (km)</span><input type="number" id="minTripKm" value="5" step="0.5"></div>
       <div class="row"><span>Max Pickup Doori (0.5 - 12 km)</span><input type="number" id="maxPickupKm" value="2" step="0.5"></div>
@@ -88,14 +88,14 @@ const htmlPage = `<!DOCTYPE html>
         </a>
         <div class="qr-box">
           <div style="font-size: 12px; color: #8b949e; margin-bottom: 8px;">Or Scan QR from GPay / PhonePe / Paytm:</div>
-          <img id="upiQrImage" src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=upi%3A%2F%2Fpay%3Fpa%3D${encodeURIComponent(MERCHANT_UPI)}%26pn%3DSmart%2520Captain%26am%3D9.00%26cu%3DINR" alt="UPI QR Code">
+          <img id="upiQrImage" src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=upi%3A%2F%2Fpay%3Fpa%3D${encodeURIComponent(MERCHANT_UPI)}%26pn%3DSmart%2520Captain%26am%3D9.00%26cu%3DINR" alt="UPI QR">
           <div style="font-size: 13px; color: #58a6ff; margin-top: 6px;">UPI ID: <strong>${MERCHANT_UPI}</strong></div>
         </div>
         <label class="field-label">Safety Check — Enter 12-Digit UPI Ref / UTR No. from GPay:</label>
         <input type="text" id="utrInput" class="full-input" placeholder="12-digit UTR number" maxlength="12">
       </div>
 
-      <button class="verify-btn" onclick="activateDriverPass()">Save Rules & Activate Pass</button>
+      <button class="verify-btn" onclick="activateDriverPass()">Save Rules & Submit for Verification</button>
       <div id="statusMsg" class="status-msg"></div>
     </div>
   </div>
@@ -149,7 +149,7 @@ const htmlPage = `<!DOCTYPE html>
       }
 
       statusEl.style.color = "#58a6ff";
-      statusEl.innerText = "Verifying and saving...";
+      statusEl.innerText = "Saving rules and submitting UTR...";
 
       try {
         const res = await fetch('/api/activate', {
@@ -205,17 +205,13 @@ const server = http.createServer((req, res) => {
             return res.end(JSON.stringify({ success: false, message: 'This UTR number has already been used!' }));
           }
           db.usedUtrs.push(utr);
-        } else if (db.drivers[phone] && db.drivers[phone].trialUsed) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ success: false, message: 'Free trial already used on this number.' }));
         }
 
-        const validTill = new Date(Date.now() + (days || 1) * 86400000).toLocaleDateString('en-IN');
         db.drivers[phone] = {
           phone,
-          plan: planName + ' - Valid till ' + validTill,
+          plan: planName,
+          status: isPaidPlan ? 'Pending Verification' : 'Active',
           freeRides: isPaidPlan ? 'Unlimited' : 10,
-          trialUsed: true,
           utr: isPaidPlan ? utr : 'FREE_TRIAL',
           rules,
           updatedAt: new Date().toISOString()
@@ -225,11 +221,11 @@ const server = http.createServer((req, res) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({
           success: true,
-          message: 'Active! ' + planName + ' (Valid till ' + validTill + ') & Ride Rules Saved.'
+          message: 'Rules saved! Status: Pending admin verification of UTR.'
         }));
       } catch (e) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ success: false, message: 'Server error saving driver data.' }));
+        return res.end(JSON.stringify({ success: false, message: 'Server error saving data.' }));
       }
     });
     return;
@@ -241,10 +237,18 @@ const server = http.createServer((req, res) => {
     const db = loadDatabase();
     if (!phone || !db.drivers[phone]) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ active: false }));
+      return res.end(JSON.stringify({ active: false, message: 'Driver not found.' }));
     }
+
+    const driver = db.drivers[phone];
+    // Only allow filtering if status is Active
+    if (driver.status !== 'Active') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ active: false, message: 'Pass pending payment verification.' }));
+    }
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ active: true, driver: db.drivers[phone] }));
+    return res.end(JSON.stringify({ active: true, rules: driver.rules }));
   }
 
   res.writeHead(404, { 'Content-Type': 'text/plain' });
