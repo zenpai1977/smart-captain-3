@@ -255,6 +255,73 @@ const server = http.createServer((req, res) => {
   res.end('Not Found');
 });
 
+// 4. Admin Dashboard (GET /admin)
+  if (req.method === 'GET' && req.url.startsWith('/admin')) {
+    const db = loadDatabase();
+    let rows = '';
+    for (const [phone, d] of Object.entries(db.drivers)) {
+      const isPending = d.status === 'Pending Verification';
+      rows += `<tr>
+        <td>${phone}</td>
+        <td>${d.plan}</td>
+        <td>${d.utr}</td>
+        <td style="color: ${isPending ? '#ff6b6b' : '#4caf50'}; font-weight: bold;">${d.status || 'Active'}</td>
+        <td>${isPending ? `<button onclick="approveDriver('${phone}')" style="background:#238636;color:#fff;padding:6px 12px;border:none;border-radius:4px;cursor:pointer;">Approve</button>` : 'Approved'}</td>
+      </tr>`;
+    }
+
+    const adminPage = `<!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <title>Smart Captain Admin Panel</title>
+      <style>
+        body { background: #0d1017; color: #fff; font-family: Arial, sans-serif; padding: 20px; }
+        h1 { color: #d4af37; font-size: 22px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #161b22; border-radius: 8px; overflow: hidden; }
+        th, td { border: 1px solid #30363d; padding: 12px; text-align: left; font-size: 14px; }
+        th { background: #21262d; color: #f0f6fc; }
+      </style>
+    </head>
+    <body>
+      <h1>Smart Captain — Admin Approval Panel</h1>
+      <p>Verify UTR numbers from your GPay app, then click approve below:</p>
+      <table>
+        <tr><th>Phone</th><th>Plan</th><th>UTR Number</th><th>Status</th><th>Action</th></tr>
+        ${rows}
+      </table>
+      <script>
+        async function approveDriver(phone) {
+          const res = await fetch('/api/approve?phone=' + phone, { method: 'POST' });
+          const data = await res.json();
+          alert(data.message);
+          location.reload();
+        }
+      </script>
+    </body>
+    </html>`;
+
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    return res.end(adminPage);
+  }
+
+  // 5. API to Approve Driver (POST /api/approve?phone=...)
+  if (req.method === 'POST' && req.url.startsWith('/api/approve')) {
+    const urlObj = new URL(req.url, 'http://' + req.headers.host);
+    const phone = urlObj.searchParams.get('phone');
+    const db = loadDatabase();
+
+    if (phone && db.drivers[phone]) {
+      db.drivers[phone].status = 'Active';
+      saveDatabase(db);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ success: true, message: 'Driver approved successfully!' }));
+    }
+
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ success: false, message: 'Driver not found.' }));
+  }
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log('SMART CAPTAIN CLOUD SERVER IS LIVE ON PORT ' + PORT);
 });
