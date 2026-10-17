@@ -49,6 +49,7 @@ const htmlPage = `<!DOCTYPE html>
     .qr-box { text-align: center; background: #0d1117; border: 1px dashed #30363d; border-radius: 8px; padding: 12px; margin-top: 12px; }
     .qr-box img { width: 150px; height: 150px; border-radius: 8px; background: #fff; padding: 6px; }
     .verify-btn { width: 100%; background: #238636; color: #fff; padding: 13px; border: none; border-radius: 8px; font-weight: bold; font-size: 15px; cursor: pointer; margin-top: 14px; }
+    .check-btn { width: 100%; background: #21262d; color: #58a6ff; border: 1px solid #30363d; padding: 12px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; margin-top: 10px; }
     .status-msg { margin-top: 12px; font-size: 14px; font-weight: bold; text-align: center; }
   </style>
 </head>
@@ -97,6 +98,10 @@ const htmlPage = `<!DOCTYPE html>
 
       <button class="verify-btn" onclick="activateDriverPass()">Save Rules & Submit for Verification</button>
       <div id="statusMsg" class="status-msg"></div>
+
+      <!-- Driver Pass Status Checker Button -->
+      <button class="check-btn" onclick="checkDriverStatus()">Check My Pass Status</button>
+      <div id="checkResult" class="status-msg"></div>
     </div>
   </div>
 
@@ -163,6 +168,37 @@ const htmlPage = `<!DOCTYPE html>
       } catch (err) {
         statusEl.style.color = "#ff6b6b";
         statusEl.innerText = "Network error. Please try again.";
+      }
+    }
+
+    async function checkDriverStatus() {
+      const phone = document.getElementById('driverPhone').value.trim();
+      const resultEl = document.getElementById('checkResult');
+
+      if (phone.length !== 10 || isNaN(phone)) {
+        resultEl.style.color = "#ff6b6b";
+        resultEl.innerText = "Please enter your 10-digit mobile number above first.";
+        return;
+      }
+
+      resultEl.style.color = "#58a6ff";
+      resultEl.innerText = "Checking server status...";
+
+      try {
+        const res = await fetch('/api/driver?phone=' + phone);
+        const data = await res.json();
+
+        if (data.active) {
+          resultEl.style.color = "#4caf50";
+          resultEl.innerText = "Pass Active! Your ride filters are successfully unlocked.";
+          document.getElementById('paymentSection').style.display = "none";
+        } else {
+          resultEl.style.color = "#ff6b6b";
+          resultEl.innerText = "Still Pending Verification. Please wait for admin approval.";
+        }
+      } catch (err) {
+        resultEl.style.color = "#ff6b6b";
+        resultEl.innerText = "Network error. Please try again.";
       }
     }
   </script>
