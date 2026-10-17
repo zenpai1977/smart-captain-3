@@ -3,11 +3,10 @@ const http = require('http');
 const PORT = process.env.PORT || 3000;
 const MERCHANT_UPI = 'kkumae221@okhdfcbank';
 
-// Supabase Credentials (uses Render Environment Variables with direct fallback)
-const SUPABASE_URL = (process.env.SUPABASE_URL || 'https://tzteymjcdmhedaqpapcm.supabase.co').trim();
+// Bulletproof Supabase URL & Key (strips any accidental markdown brackets)
+const SUPABASE_URL = 'https://' + 'tzteymjcdmhedaqpapcm.supabase.co';
 const SUPABASE_KEY = (process.env.SUPABASE_SECRET_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR6dGV5bWpjZG1oZWRhcXBhcGNtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MjE1NTkxOCwiZXhwIjoyMTA3NzMxOTE4fQ.qK6kT2hesHYGXJUOMgxhltgsK3raczLJxU7bVDr49w8').trim();
 
-// Helper for Supabase REST API (Zero npm dependencies required)
 async function supabaseRequest(endpoint, method = 'GET', body = null, extraHeaders = {}) {
   const headers = {
     'apikey': SUPABASE_KEY,
@@ -109,6 +108,16 @@ const htmlPage = `<!DOCTYPE html>
 
   <script>
     const UPI_ID = "${MERCHANT_UPI}";
+    const QR_BASE = 'https://' + 'api.qrserver.com/v1/create-qr-code/?size=180x180&data=';
+
+    // Auto-load saved phone number and check status on page open
+    window.onload = function() {
+      const savedPhone = localStorage.getItem('smart_captain_phone');
+      if (savedPhone) {
+        document.getElementById('driverPhone').value = savedPhone;
+        checkDriverStatus();
+      }
+    };
 
     function updatePaymentUI() {
       const select = document.getElementById('planSelect');
@@ -123,7 +132,7 @@ const htmlPage = `<!DOCTYPE html>
       const gpayLink = document.getElementById('gpayLink');
       gpayLink.href = upiUri;
       gpayLink.innerText = 'Tap to Pay ₹' + parseInt(amount, 10) + ' Directly on GPay / UPI App';
-      document.getElementById('upiQrImage').src = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(upiUri);
+      document.getElementById('upiQrImage').src = QR_BASE + encodeURIComponent(upiUri);
     }
 
     async function activateDriverPass() {
@@ -154,6 +163,9 @@ const htmlPage = `<!DOCTYPE html>
         return;
       }
 
+      // Save phone to local storage so user doesn't lose it on reload
+      localStorage.setItem('smart_captain_phone', phone);
+
       statusEl.style.color = "#58a6ff";
       statusEl.innerText = "Saving rules to cloud DB...";
 
@@ -181,6 +193,9 @@ const htmlPage = `<!DOCTYPE html>
         resultEl.innerText = "Please enter your 10-digit mobile number above first.";
         return;
       }
+
+      // Save phone to local storage
+      localStorage.setItem('smart_captain_phone', phone);
 
       resultEl.style.color = "#58a6ff";
       resultEl.innerText = "Checking cloud status...";
