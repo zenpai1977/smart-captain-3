@@ -1,0 +1,9 @@
+{
+  "name": "smart-captain",
+  "version": "1.0.0",
+  "main": "server",
+  "scripts": {
+    "start": "node server"
+  },
+  "dependencies": {}
+}
