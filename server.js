@@ -179,83 +179,13 @@ const server = http.createServer((req, res) => {
     return res.end();
   }
 
+  // 1. Serve Main Dashboard
   if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     return res.end(htmlPage);
   }
 
-  if (req.method === 'POST' && req.url === '/api/activate') {
-    let body = '';
-    req.on('data', chunk => { body += chunk.toString(); });
-    req.on('end', () => {
-      try {
-        const { phone, amount, planName, days, utr, rules } = JSON.parse(body);
-        const db = loadDatabase();
-        const isPaidPlan = amount !== "0.00";
-
-        if (isPaidPlan) {
-          const isTwelveDigits = /^\d{12}$/.test(utr);
-          const isFakeRepeated = /^(\d)\1{11}$/.test(utr);
-          if (!isTwelveDigits || isFakeRepeated) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ success: false, message: 'Invalid 12-digit UTR number.' }));
-          }
-          if (db.usedUtrs.includes(utr)) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ success: false, message: 'This UTR number has already been used!' }));
-          }
-          db.usedUtrs.push(utr);
-        }
-
-        db.drivers[phone] = {
-          phone,
-          plan: planName,
-          status: isPaidPlan ? 'Pending Verification' : 'Active',
-          freeRides: isPaidPlan ? 'Unlimited' : 10,
-          utr: isPaidPlan ? utr : 'FREE_TRIAL',
-          rules,
-          updatedAt: new Date().toISOString()
-        };
-
-        saveDatabase(db);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({
-          success: true,
-          message: 'Rules saved! Status: Pending admin verification of UTR.'
-        }));
-      } catch (e) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ success: false, message: 'Server error saving data.' }));
-      }
-    });
-    return;
-  }
-
-  if (req.method === 'GET' && req.url.startsWith('/api/driver')) {
-    const urlObj = new URL(req.url, 'http://' + req.headers.host);
-    const phone = urlObj.searchParams.get('phone');
-    const db = loadDatabase();
-    if (!phone || !db.drivers[phone]) {
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ active: false, message: 'Driver not found.' }));
-    }
-
-    const driver = db.drivers[phone];
-    // Only allow filtering if status is Active
-    if (driver.status !== 'Active') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ active: false, message: 'Pass pending payment verification.' }));
-    }
-
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ active: true, rules: driver.rules }));
-  }
-
-  res.writeHead(404, { 'Content-Type': 'text/plain' });
-  res.end('Not Found');
-});
-
-// 4. Admin Dashboard (GET /admin)
+  // 2. Admin Dashboard (GET /admin)
   if (req.method === 'GET' && req.url.startsWith('/admin')) {
     const db = loadDatabase();
     let rows = '';
@@ -305,7 +235,7 @@ const server = http.createServer((req, res) => {
     return res.end(adminPage);
   }
 
-  // 5. API to Approve Driver (POST /api/approve?phone=...)
+  // 3. API to Approve Driver (POST /api/approve?phone=...)
   if (req.method === 'POST' && req.url.startsWith('/api/approve')) {
     const urlObj = new URL(req.url, 'http://' + req.headers.host);
     const phone = urlObj.searchParams.get('phone');
@@ -321,6 +251,78 @@ const server = http.createServer((req, res) => {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ success: false, message: 'Driver not found.' }));
   }
+
+  // 4. Verify GPay UTR & Save Driver Rules
+  if (req.method === 'POST' && req.url === '/api/activate') {
+    let body = '';
+    req.on('data', chunk => { body += chunk.toString(); });
+    req.on('end', () => {
+      try {
+        const { phone, amount, planName, days, utr, rules } = JSON.parse(body);
+        const db = loadDatabase();
+        const isPaidPlan = amount !== "0.00";
+
+        if (isPaidPlan) {
+          const isTwelveDigits = /^\d{12}$/.test(utr);
+          const isFakeRepeated = /^(\d)\1{11}$/.test(utr);
+          if (!isTwelveDigits || isFakeRepeated) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: false, message: 'Invalid 12-digit UTR number.' }));
+          }
+          if (db.usedUtrs.includes(utr)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: false, message: 'This UTR number has already been used!' }));
+          }
+          db.usedUtrs.push(utr);
+        }
+
+        db.drivers[phone] = {
+          phone,
+          plan: planName,
+          status: isPaidPlan ? 'Pending Verification' : 'Active',
+          freeRides: isPaidPlan ? 'Unlimited' : 10,
+          utr: isPaidPlan ? utr : 'FREE_TRIAL',
+          rules,
+          updatedAt: new Date().toISOString()
+        };
+
+        saveDatabase(db);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          success: true,
+          message: 'Rules saved! Status: Pending admin verification of UTR.'
+        }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: false, message: 'Server error saving data.' }));
+      }
+    });
+    return;
+  }
+
+  // 5. Android App Sync Endpoint
+  if (req.method === 'GET' && req.url.startsWith('/api/driver')) {
+    const urlObj = new URL(req.url, 'http://' + req.headers.host);
+    const phone = urlObj.searchParams.get('phone');
+    const db = loadDatabase();
+    if (!phone || !db.drivers[phone]) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ active: false, message: 'Driver not found.' }));
+    }
+
+    const driver = db.drivers[phone];
+    if (driver.status !== 'Active') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ active: false, message: 'Pass pending payment verification.' }));
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ active: true, rules: driver.rules }));
+  }
+
+  res.writeHead(404, { 'Content-Type': 'text/plain' });
+  res.end('Not Found');
+});
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log('SMART CAPTAIN CLOUD SERVER IS LIVE ON PORT ' + PORT);
