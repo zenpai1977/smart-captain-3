@@ -1,0 +1,79 @@
+package com.smartcaptain.app
+
+import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import android.util.Log
+
+class SmartCaptainService : AccessibilityService() {
+
+    private val TAG = "SmartCaptain"
+    
+    // Example Driver Rules (These can be synced from your local or cloud database)
+    private val minFare = 60
+    private val minDistanceKm = 5.0
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        val rootNode: AccessibilityNodeInfo = rootInActiveWindow ?: return
+        
+        // Scan the active window nodes for ride card details
+        parseRideCard(rootNode)
+    }
+
+    private fun parseRideCard(node: AccessibilityNodeInfo) {
+        val text = node.text?.toString() ?: ""
+        
+        // Check if the current node contains pricing or distance indicators
+        if (text.contains("₹") || text.contains("km")) {
+            Log.d(TAG, "Detected Ride Text: $text")
+            
+            // Perform basic matching logic
+            if (evaluateRules(text)) {
+                // If rules match, search for the Accept button and click it
+                performActionOnNode(node, "Accept")
+            }
+        }
+
+        // Recursively traverse child nodes
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            parseRideCard(child)
+            child.recycle()
+        }
+    }
+
+    private fun evaluateRules(rideText: String): Boolean {
+        // Implement parsing logic to extract numbers from rideText and compare against minFare/minDistanceKm
+        // Returns true if the ride matches the driver's custom criteria
+        return true
+    }
+
+    private fun performActionOnNode(node: AccessibilityNodeInfo, targetText: String) {
+        var cursor: AccessibilityNodeInfo? = node
+        while (cursor != null) {
+            if (cursor.text?.toString()?.contains(targetText, ignoreCase = true) == true && cursor.isClickable) {
+                cursor.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                Log.d(TAG, "Successfully clicked: $targetText")
+                break
+            }
+            cursor = cursor.parent
+        }
+    }
+
+    override fun onInterrupt() {
+        Log.d(TAG, "Accessibility Service Interrupted")
+    }
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        val info = AccessibilityServiceInfo().apply {
+            eventTypes = AccessibilityEvent.TYPES_ALL_MASK
+            feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+            notificationTimeout = 50
+            flags = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+        }
+        serviceInfo = info
+        Log.d(TAG, "Smart Captain Accessibility Service Connected")
+    }
+}

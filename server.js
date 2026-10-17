@@ -1,13 +1,33 @@
 const http = require('http');
-const { createClient } = require('@supabase/supabase-js');
 
 const PORT = process.env.PORT || 3000;
 const MERCHANT_UPI = 'kkumae221@okhdfcbank';
 
-// Initialize Supabase Client from Environment Variables
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SECRET_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+// Supabase Credentials (uses Render Environment Variables with direct fallback)
+const SUPABASE_URL = (process.env.SUPABASE_URL || 'https://tzteymjcdmhedaqpapcm.supabase.co').trim();
+const SUPABASE_KEY = (process.env.SUPABASE_SECRET_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR6dGV5bWpjZG1oZWRhcXBhcGNtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MjE1NTkxOCwiZXhwIjoyMTA3NzMxOTE4fQ.qK6kT2hesHYGXJUOMgxhltgsK3raczLJxU7bVDr49w8').trim();
+
+// Helper for Supabase REST API (Zero npm dependencies required)
+async function supabaseRequest(endpoint, method = 'GET', body = null, extraHeaders = {}) {
+  const headers = {
+    'apikey': SUPABASE_KEY,
+    'Authorization': `Bearer ${SUPABASE_KEY}`,
+    'Content-Type': 'application/json',
+    ...extraHeaders
+  };
+  const options = { method, headers };
+  if (body) options.body = JSON.stringify(body);
+
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${endpoint}`, options);
+  const text = await res.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch (e) {
+    data = text;
+  }
+  return { ok: res.ok, status: res.status, data };
+}
 
 const htmlPage = `<!DOCTYPE html>
 <html lang="en">
@@ -175,7 +195,7 @@ const htmlPage = `<!DOCTYPE html>
           document.getElementById('paymentSection').style.display = "none";
         } else {
           resultEl.style.color = "#ff6b6b";
-          resultEl.innerText = "Still Pending Verification. Please wait for admin approval.";
+          resultEl.innerText = data.message || "Still Pending Verification. Please wait for admin approval.";
         }
       } catch (err) {
         resultEl.style.color = "#ff6b6b";
@@ -205,17 +225,17 @@ const server = http.createServer(async (req, res) => {
   // 2. Admin Dashboard (GET /admin)
   if (req.method === 'GET' && req.url.startsWith('/admin')) {
     try {
-      const { data: drivers, error } = await supabase.from('drivers').select('*');
+      const { ok, data: drivers } = await supabaseRequest('drivers?select=*');
       let rows = '';
-      
-      if (!error && drivers) {
+
+      if (ok && Array.isArray(drivers)) {
         drivers.forEach(d => {
           const isPending = d.status === 'Pending Verification';
           rows += `<tr>
-            <td>${d.phone}</td>
-            <td>${d.plan}</td>
-            <td>${d.utr}</td>
-            <td style="color: ${isPending ? '#ff6b6b' : '#4caf50'}; font-weight: bold;">${d.status}</td>
+            <td>${d.phone || ''}</td>
+            <td>${d.plan || ''}</td>
+            <td>${d.utr || ''}</td>
+            <td style="color: ${isPending ? '#ff6b6b' : '#4caf50'}; font-weight: bold;">${d.status || 'Active'}</td>
             <td>${isPending ? `<button onclick="approveDriver('${d.phone}')" style="background:#238636;color:#fff;padding:6px 12px;border:none;border-radius:4px;cursor:pointer;">Approve</button>` : 'Approved'}</td>
           </tr>`;
         });
@@ -266,12 +286,13 @@ const server = http.createServer(async (req, res) => {
     const phone = urlObj.searchParams.get('phone');
 
     if (phone) {
-      const { error } = await supabase
-        .from('drivers')
-        .update({ status: 'Active' })
-        .eq('phone', phone);
+      const { ok } = await supabaseRequest(
+        `drivers?phone=eq.${encodeURIComponent(phone)}`,
+        'PATCH',
+        { status: 'Active' }
+      );
 
-      if (!error) {
+      if (ok) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ success: true, message: 'Driver approved successfully in Supabase!' }));
       }
@@ -298,14 +319,12 @@ const server = http.createServer(async (req, res) => {
             return res.end(JSON.stringify({ success: false, message: 'Invalid 12-digit UTR number.' }));
           }
 
-          // Check if UTR already exists in Supabase
-          const { data: existingUtr } = await supabase
-            .from('drivers')
-            .select('utr')
-            .eq('utr', utr)
-            .single();
+          // Check if UTR already exists
+          const { ok: utrOk, data: existingUtrs } = await supabaseRequest(
+            `drivers?utr=eq.${encodeURIComponent(utr)}&select=phone,utr`
+          );
 
-          if (existingUtr) {
+          if (utrOk && Array.isArray(existingUtrs) && existingUtrs.length > 0) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ success: false, message: 'This UTR number has already been used!' }));
           }
@@ -315,28 +334,34 @@ const server = http.createServer(async (req, res) => {
           phone,
           plan: planName,
           status: isPaidPlan ? 'Pending Verification' : 'Active',
-          utr: isPaidPlan ? utr : 'FREE_TRIAL',
-          rules,
-          updated_at: new Date().toISOString()
+          utr: isPaidPlan ? utr : `FREE_${phone}`,
+          rules
         };
 
-        // Upsert driver data into Supabase
-        const { error } = await supabase
-          .from('drivers')
-          .upsert(driverData, { onConflict: 'phone' });
+        // Upsert driver into Supabase
+        const { ok, data } = await supabaseRequest(
+          'drivers?on_conflict=phone',
+          'POST',
+          driverData,
+          { 'Prefer': 'resolution=merge-duplicates' }
+        );
 
-        if (error) {
-          throw error;
+        if (!ok) {
+          const errMsg = (data && data.message) ? data.message : 'Supabase error saving driver.';
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, message: errMsg }));
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({
           success: true,
-          message: 'Rules saved! Status: Pending admin verification of UTR.'
+          message: isPaidPlan
+            ? 'Rules saved to Supabase! Status: Pending admin verification of UTR.'
+            : 'Free Trial Activated! Rules saved to Supabase.'
         }));
       } catch (e) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ success: false, message: 'Server database error saving data.' }));
+        return res.end(JSON.stringify({ success: false, message: 'Server error: ' + e.message }));
       }
     });
     return;
@@ -352,17 +377,16 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ active: false, message: 'Phone parameter missing.' }));
     }
 
-    const { data: driver, error } = await supabase
-      .from('drivers')
-      .select('*')
-      .eq('phone', phone)
-      .single();
+    const { ok, data } = await supabaseRequest(
+      `drivers?phone=eq.${encodeURIComponent(phone)}&select=*`
+    );
 
-    if (error || !driver) {
+    if (!ok || !Array.isArray(data) || data.length === 0) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ active: false, message: 'Driver not found.' }));
     }
 
+    const driver = data[0];
     if (driver.status !== 'Active') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ active: false, message: 'Pass pending payment verification.' }));
