@@ -1,30 +1,13 @@
 const http = require('http');
-const fs = require('fs');
-const path = require('path');
+const { createClient } = require('@supabase/supabase-js');
 
 const PORT = process.env.PORT || 3000;
-const DB_FILE = path.join(__dirname, 'drivers_db.json');
 const MERCHANT_UPI = 'kkumae221@okhdfcbank';
 
-function loadDatabase() {
-  try {
-    if (!fs.existsSync(DB_FILE)) {
-      const init = { drivers: {}, usedUtrs: [] };
-      fs.writeFileSync(DB_FILE, JSON.stringify(init, null, 2));
-      return init;
-    }
-    const parsed = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-    parsed.drivers = parsed.drivers || {};
-    parsed.usedUtrs = parsed.usedUtrs || [];
-    return parsed;
-  } catch (err) {
-    return { drivers: {}, usedUtrs: [] };
-  }
-}
-
-function saveDatabase(data) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
-}
+// Initialize Supabase Client from Environment Variables
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SECRET_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 const htmlPage = `<!DOCTYPE html>
 <html lang="en">
@@ -56,7 +39,7 @@ const htmlPage = `<!DOCTYPE html>
 <body>
   <div class="container">
     <div class="card">
-      <div class="version-tag">Version 5.26.1 • Pehle 10 rides bilkul free</div>
+      <div class="version-tag">Version 5.26.1 • Supabase Cloud DB Connected</div>
       <h1>smart captain — Apni pasand ki ride. Apne rules par.</h1>
       <p class="sub">Ghaate wali rides chhodo, kamai wali uthao. Rapido, Uber aur Porter ki bookings apne rules par filter karo.</p>
     </div>
@@ -99,7 +82,6 @@ const htmlPage = `<!DOCTYPE html>
       <button class="verify-btn" onclick="activateDriverPass()">Save Rules & Submit for Verification</button>
       <div id="statusMsg" class="status-msg"></div>
 
-      <!-- Driver Pass Status Checker Button -->
       <button class="check-btn" onclick="checkDriverStatus()">Check My Pass Status</button>
       <div id="checkResult" class="status-msg"></div>
     </div>
@@ -129,7 +111,6 @@ const htmlPage = `<!DOCTYPE html>
       const select = document.getElementById('planSelect');
       const amount = select.value;
       const planName = select.options[select.selectedIndex].getAttribute('data-plan');
-      const days = parseInt(select.options[select.selectedIndex].getAttribute('data-days'), 10);
       const utr = document.getElementById('utrInput').value.trim();
       const statusEl = document.getElementById('statusMsg');
 
@@ -154,13 +135,13 @@ const htmlPage = `<!DOCTYPE html>
       }
 
       statusEl.style.color = "#58a6ff";
-      statusEl.innerText = "Saving rules and submitting UTR...";
+      statusEl.innerText = "Saving rules to cloud DB...";
 
       try {
         const res = await fetch('/api/activate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone, amount, planName, days, utr, rules })
+          body: JSON.stringify({ phone, amount, planName, utr, rules })
         });
         const result = await res.json();
         statusEl.style.color = result.success ? "#4caf50" : "#ff6b6b";
@@ -182,7 +163,7 @@ const htmlPage = `<!DOCTYPE html>
       }
 
       resultEl.style.color = "#58a6ff";
-      resultEl.innerText = "Checking server status...";
+      resultEl.innerText = "Checking cloud status...";
 
       try {
         const res = await fetch('/api/driver?phone=' + phone);
@@ -205,7 +186,7 @@ const htmlPage = `<!DOCTYPE html>
 </body>
 </html>`;
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -223,79 +204,90 @@ const server = http.createServer((req, res) => {
 
   // 2. Admin Dashboard (GET /admin)
   if (req.method === 'GET' && req.url.startsWith('/admin')) {
-    const db = loadDatabase();
-    let rows = '';
-    for (const [phone, d] of Object.entries(db.drivers)) {
-      const isPending = d.status === 'Pending Verification';
-      rows += `<tr>
-        <td>${phone}</td>
-        <td>${d.plan}</td>
-        <td>${d.utr}</td>
-        <td style="color: ${isPending ? '#ff6b6b' : '#4caf50'}; font-weight: bold;">${d.status || 'Active'}</td>
-        <td>${isPending ? `<button onclick="approveDriver('${phone}')" style="background:#238636;color:#fff;padding:6px 12px;border:none;border-radius:4px;cursor:pointer;">Approve</button>` : 'Approved'}</td>
-      </tr>`;
+    try {
+      const { data: drivers, error } = await supabase.from('drivers').select('*');
+      let rows = '';
+      
+      if (!error && drivers) {
+        drivers.forEach(d => {
+          const isPending = d.status === 'Pending Verification';
+          rows += `<tr>
+            <td>${d.phone}</td>
+            <td>${d.plan}</td>
+            <td>${d.utr}</td>
+            <td style="color: ${isPending ? '#ff6b6b' : '#4caf50'}; font-weight: bold;">${d.status}</td>
+            <td>${isPending ? `<button onclick="approveDriver('${d.phone}')" style="background:#238636;color:#fff;padding:6px 12px;border:none;border-radius:4px;cursor:pointer;">Approve</button>` : 'Approved'}</td>
+          </tr>`;
+        });
+      }
+
+      const adminPage = `<!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <title>Smart Captain Admin Panel</title>
+        <style>
+          body { background: #0d1017; color: #fff; font-family: Arial, sans-serif; padding: 20px; }
+          h1 { color: #d4af37; font-size: 22px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #161b22; border-radius: 8px; overflow: hidden; }
+          th, td { border: 1px solid #30363d; padding: 12px; text-align: left; font-size: 14px; }
+          th { background: #21262d; color: #f0f6fc; }
+        </style>
+      </head>
+      <body>
+        <h1>Smart Captain — Supabase Admin Panel</h1>
+        <p>Verify UTR numbers from your GPay app, then click approve below:</p>
+        <table>
+          <tr><th>Phone</th><th>Plan</th><th>UTR Number</th><th>Status</th><th>Action</th></tr>
+          ${rows}
+        </table>
+        <script>
+          async function approveDriver(phone) {
+            const res = await fetch('/api/approve?phone=' + phone, { method: 'POST' });
+            const data = await res.json();
+            alert(data.message);
+            location.reload();
+          }
+        </script>
+      </body>
+      </html>`;
+
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(adminPage);
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      return res.end('Database error loading admin panel.');
     }
-
-    const adminPage = `<!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <title>Smart Captain Admin Panel</title>
-      <style>
-        body { background: #0d1017; color: #fff; font-family: Arial, sans-serif; padding: 20px; }
-        h1 { color: #d4af37; font-size: 22px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #161b22; border-radius: 8px; overflow: hidden; }
-        th, td { border: 1px solid #30363d; padding: 12px; text-align: left; font-size: 14px; }
-        th { background: #21262d; color: #f0f6fc; }
-      </style>
-    </head>
-    <body>
-      <h1>Smart Captain — Admin Approval Panel</h1>
-      <p>Verify UTR numbers from your GPay app, then click approve below:</p>
-      <table>
-        <tr><th>Phone</th><th>Plan</th><th>UTR Number</th><th>Status</th><th>Action</th></tr>
-        ${rows}
-      </table>
-      <script>
-        async function approveDriver(phone) {
-          const res = await fetch('/api/approve?phone=' + phone, { method: 'POST' });
-          const data = await res.json();
-          alert(data.message);
-          location.reload();
-        }
-      </script>
-    </body>
-    </html>`;
-
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    return res.end(adminPage);
   }
 
   // 3. API to Approve Driver (POST /api/approve?phone=...)
   if (req.method === 'POST' && req.url.startsWith('/api/approve')) {
     const urlObj = new URL(req.url, 'http://' + req.headers.host);
     const phone = urlObj.searchParams.get('phone');
-    const db = loadDatabase();
 
-    if (phone && db.drivers[phone]) {
-      db.drivers[phone].status = 'Active';
-      saveDatabase(db);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ success: true, message: 'Driver approved successfully!' }));
+    if (phone) {
+      const { error } = await supabase
+        .from('drivers')
+        .update({ status: 'Active' })
+        .eq('phone', phone);
+
+      if (!error) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: true, message: 'Driver approved successfully in Supabase!' }));
+      }
     }
 
     res.writeHead(400, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ success: false, message: 'Driver not found.' }));
+    return res.end(JSON.stringify({ success: false, message: 'Failed to approve driver.' }));
   }
 
-  // 4. Verify GPay UTR & Save Driver Rules
+  // 4. Verify GPay UTR & Save Driver Rules to Supabase
   if (req.method === 'POST' && req.url === '/api/activate') {
     let body = '';
     req.on('data', chunk => { body += chunk.toString(); });
-    req.on('end', () => {
+    req.on('end', async () => {
       try {
-        const { phone, amount, planName, days, utr, rules } = JSON.parse(body);
-        const db = loadDatabase();
+        const { phone, amount, planName, utr, rules } = JSON.parse(body);
         const isPaidPlan = amount !== "0.00";
 
         if (isPaidPlan) {
@@ -305,24 +297,38 @@ const server = http.createServer((req, res) => {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ success: false, message: 'Invalid 12-digit UTR number.' }));
           }
-          if (db.usedUtrs.includes(utr)) {
+
+          // Check if UTR already exists in Supabase
+          const { data: existingUtr } = await supabase
+            .from('drivers')
+            .select('utr')
+            .eq('utr', utr)
+            .single();
+
+          if (existingUtr) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ success: false, message: 'This UTR number has already been used!' }));
           }
-          db.usedUtrs.push(utr);
         }
 
-        db.drivers[phone] = {
+        const driverData = {
           phone,
           plan: planName,
           status: isPaidPlan ? 'Pending Verification' : 'Active',
-          freeRides: isPaidPlan ? 'Unlimited' : 10,
           utr: isPaidPlan ? utr : 'FREE_TRIAL',
           rules,
-          updatedAt: new Date().toISOString()
+          updated_at: new Date().toISOString()
         };
 
-        saveDatabase(db);
+        // Upsert driver data into Supabase
+        const { error } = await supabase
+          .from('drivers')
+          .upsert(driverData, { onConflict: 'phone' });
+
+        if (error) {
+          throw error;
+        }
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({
           success: true,
@@ -330,7 +336,7 @@ const server = http.createServer((req, res) => {
         }));
       } catch (e) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ success: false, message: 'Server error saving data.' }));
+        return res.end(JSON.stringify({ success: false, message: 'Server database error saving data.' }));
       }
     });
     return;
@@ -340,13 +346,23 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url.startsWith('/api/driver')) {
     const urlObj = new URL(req.url, 'http://' + req.headers.host);
     const phone = urlObj.searchParams.get('phone');
-    const db = loadDatabase();
-    if (!phone || !db.drivers[phone]) {
+
+    if (!phone) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ active: false, message: 'Phone parameter missing.' }));
+    }
+
+    const { data: driver, error } = await supabase
+      .from('drivers')
+      .select('*')
+      .eq('phone', phone)
+      .single();
+
+    if (error || !driver) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ active: false, message: 'Driver not found.' }));
     }
 
-    const driver = db.drivers[phone];
     if (driver.status !== 'Active') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ active: false, message: 'Pass pending payment verification.' }));
@@ -361,5 +377,5 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log('SMART CAPTAIN CLOUD SERVER IS LIVE ON PORT ' + PORT);
+  console.log('SMART CAPTAIN CLOUD SERVER WITH SUPABASE IS LIVE ON PORT ' + PORT);
 });
