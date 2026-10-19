@@ -1,420 +1,179 @@
-const http = require('http');
+const express = require('express');
+const { createClient } = require('@supabase/supabase-js');
+const app = express();
 
-const PORT = process.env.PORT || 3000;
-const MERCHANT_UPI = 'kkumae221@okhdfcbank';
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// Bulletproof Supabase URL & Key (strips any accidental markdown brackets)
-const SUPABASE_URL = 'https://' + 'tzteymjcdmhedaqpapcm.supabase.co';
-const SUPABASE_KEY = (process.env.SUPABASE_SECRET_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR6dGV5bWpjZG1oZWRhcXBhcGNtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MjE1NTkxOCwiZXhwIjoyMTA3NzMxOTE4fQ.qK6kT2hesHYGXJUOMgxhltgsK3raczLJxU7bVDr49w8').trim();
-
-async function supabaseRequest(endpoint, method = 'GET', body = null, extraHeaders = {}) {
-  const headers = {
-    'apikey': SUPABASE_KEY,
-    'Authorization': `Bearer ${SUPABASE_KEY}`,
-    'Content-Type': 'application/json',
-    ...extraHeaders
-  };
-  const options = { method, headers };
-  if (body) options.body = JSON.stringify(body);
-
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${endpoint}`, options);
-  const text = await res.text();
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch (e) {
-    data = text;
-  }
-  return { ok: res.ok, status: res.status, data };
-}
-
-const htmlPage = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>smart captain — Apni pasand ki ride</title>
-  <style>
-    body { background: #0d1017; color: #fff; font-family: Arial, sans-serif; margin: 0; padding: 16px; display: flex; justify-content: center; }
-    .container { max-width: 600px; width: 100%; }
-    .card { background: #161b22; border: 1px solid #d4af37; border-radius: 12px; padding: 18px; margin-bottom: 18px; }
-    .version-tag { font-size: 12px; color: #c9d1d9; margin-bottom: 6px; }
-    h1 { font-size: 24px; margin: 4px 0 10px 0; }
-    h2 { font-size: 18px; margin: 0 0 14px 0; color: #f0f6fc; }
-    p.sub { font-size: 13px; color: #b1bac4; margin: 0; }
-    .row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #30363d; font-size: 14px; }
-    .row input[type="number"], .row input[type="text"] { background: #0d1117; border: 1px solid #8b949e; color: #fff; padding: 6px 10px; border-radius: 6px; width: 90px; text-align: center; }
-    .row input.wide-input { width: 170px; color: #4caf50; border-color: #4caf50; }
-    .field-label { display: block; font-size: 13px; color: #c9d1d9; margin: 12px 0 4px; }
-    .full-input, select { width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px; border: 1px solid #8b949e; background: #0d1117; color: #fff; font-size: 14px; }
-    .gpay-btn { display: block; text-align: center; background: #1a73e8; color: #fff; padding: 13px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-top: 14px; }
-    .qr-box { text-align: center; background: #0d1117; border: 1px dashed #30363d; border-radius: 8px; padding: 12px; margin-top: 12px; }
-    .qr-box img { width: 150px; height: 150px; border-radius: 8px; background: #fff; padding: 6px; }
-    .verify-btn { width: 100%; background: #238636; color: #fff; padding: 13px; border: none; border-radius: 8px; font-weight: bold; font-size: 15px; cursor: pointer; margin-top: 14px; }
-    .check-btn { width: 100%; background: #21262d; color: #58a6ff; border: 1px solid #30363d; padding: 12px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; margin-top: 10px; }
-    .status-msg { margin-top: 12px; font-size: 14px; font-weight: bold; text-align: center; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="card">
-      <div class="version-tag">Version 5.26.1 • Supabase Cloud DB Connected</div>
-      <h1>smart captain — Apni pasand ki ride. Apne rules par.</h1>
-      <p class="sub">Ghaate wali rides chhodo, kamai wali uthao. Rapido, Uber aur Porter ki bookings apne rules par filter karo.</p>
-    </div>
-
-    <div class="card">
-      <h2>1. Aapke Ride Filter Rules</h2>
-      <div class="row"><span>Bike / Auto / Cab / Parcel Switch</span><input type="checkbox" id="serviceSwitch" checked></div>
-      <div class="row"><span>Minimum Trip Doori (km)</span><input type="number" id="minTripKm" value="5" step="0.5"></div>
-      <div class="row"><span>Max Pickup Doori (0.5 - 12 km)</span><input type="number" id="maxPickupKm" value="2" step="0.5"></div>
-      <div class="row"><span>Minimum Kamai (₹ Fare)</span><input type="number" id="minFare" value="60"></div>
-      <div class="row"><span>Go To (Ghar / Ilaaka)</span><input type="text" id="goToArea" class="wide-input" placeholder="e.g. Connaught Place"></div>
-    </div>
-
-    <div class="card">
-      <h2>2. Direct GPay Pass & Rule Activation</h2>
-      <label class="field-label">Driver Mobile Number (10 Digits):</label>
-      <input type="text" id="driverPhone" class="full-input" placeholder="e.g. 9876543210" maxlength="10">
-
-      <label class="field-label">Select Pass Plan:</label>
-      <select id="planSelect" onchange="updatePaymentUI()">
-        <option value="9.00" data-plan="1 Day Pass (₹9)" data-days="1">1 Day Pass — ₹9 (Unlimited Rides)</option>
-        <option value="49.00" data-plan="7 Days Pass (₹49)" data-days="7">7 Days Pass — ₹49 (Unlimited Rides)</option>
-        <option value="199.00" data-plan="30 Days Pass (₹199)" data-days="30">30 Days Pro Pass — ₹199 (Unlimited Rides)</option>
-        <option value="0.00" data-plan="Free Trial (10 Rides)" data-days="1">Free Trial — ₹0 (First 10 Rides Free)</option>
-      </select>
-
-      <div id="paymentSection">
-        <a id="gpayLink" class="gpay-btn" href="upi://pay?pa=${MERCHANT_UPI}&pn=Smart%20Captain&am=9.00&cu=INR&tn=Smart%20Captain%20Pass">
-          Tap to Pay ₹9 Directly on GPay / UPI App
-        </a>
-        <div class="qr-box">
-          <div style="font-size: 12px; color: #8b949e; margin-bottom: 8px;">Or Scan QR from GPay / PhonePe / Paytm:</div>
-          <img id="upiQrImage" src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=upi%3A%2F%2Fpay%3Fpa%3D${encodeURIComponent(MERCHANT_UPI)}%26pn%3DSmart%2520Captain%26am%3D9.00%26cu%3DINR" alt="UPI QR">
-          <div style="font-size: 13px; color: #58a6ff; margin-top: 6px;">UPI ID: <strong>${MERCHANT_UPI}</strong></div>
-        </div>
-        <label class="field-label">Safety Check — Enter 12-Digit UPI Ref / UTR No. from GPay:</label>
-        <input type="text" id="utrInput" class="full-input" placeholder="12-digit UTR number" maxlength="12">
-      </div>
-
-      <button class="verify-btn" onclick="activateDriverPass()">Save Rules & Submit for Verification</button>
-      <div id="statusMsg" class="status-msg"></div>
-
-      <button class="check-btn" onclick="checkDriverStatus()">Check My Pass Status</button>
-      <div id="checkResult" class="status-msg"></div>
-    </div>
-  </div>
-
-  <script>
-    const UPI_ID = "${MERCHANT_UPI}";
-    const QR_BASE = 'https://' + 'api.qrserver.com/v1/create-qr-code/?size=180x180&data=';
-
-    // Auto-load saved phone number and check status on page open
-    window.onload = function() {
-      const savedPhone = localStorage.getItem('smart_captain_phone');
-      if (savedPhone) {
-        document.getElementById('driverPhone').value = savedPhone;
-        checkDriverStatus();
-      }
-    };
-
-    function updatePaymentUI() {
-      const select = document.getElementById('planSelect');
-      const amount = select.value;
-      const paymentSection = document.getElementById('paymentSection');
-      if (amount === "0.00") {
-        paymentSection.style.display = "none";
-        return;
-      }
-      paymentSection.style.display = "block";
-      const upiUri = 'upi://pay?pa=' + UPI_ID + '&pn=Smart%20Captain&am=' + amount + '&cu=INR&tn=Smart%20Captain%20Pass';
-      const gpayLink = document.getElementById('gpayLink');
-      gpayLink.href = upiUri;
-      gpayLink.innerText = 'Tap to Pay ₹' + parseInt(amount, 10) + ' Directly on GPay / UPI App';
-      document.getElementById('upiQrImage').src = QR_BASE + encodeURIComponent(upiUri);
-    }
-
-    async function activateDriverPass() {
-      const phone = document.getElementById('driverPhone').value.trim();
-      const select = document.getElementById('planSelect');
-      const amount = select.value;
-      const planName = select.options[select.selectedIndex].getAttribute('data-plan');
-      const utr = document.getElementById('utrInput').value.trim();
-      const statusEl = document.getElementById('statusMsg');
-
-      const rules = {
-        activeSwitch: document.getElementById('serviceSwitch').checked,
-        minTripKm: parseFloat(document.getElementById('minTripKm').value) || 5,
-        maxPickupKm: parseFloat(document.getElementById('maxPickupKm').value) || 2,
-        minFare: parseInt(document.getElementById('minFare').value, 10) || 60,
-        goToArea: document.getElementById('goToArea').value.trim()
-      };
-
-      if (phone.length !== 10 || isNaN(phone)) {
-        statusEl.style.color = "#ff6b6b";
-        statusEl.innerText = "Error: Enter a valid 10-digit mobile number.";
-        return;
-      }
-
-      if (amount !== "0.00" && (utr.length !== 12 || isNaN(utr))) {
-        statusEl.style.color = "#ff6b6b";
-        statusEl.innerText = "Safety Filter: Enter a valid 12-digit GPay UTR number.";
-        return;
-      }
-
-      // Save phone to local storage so user doesn't lose it on reload
-      localStorage.setItem('smart_captain_phone', phone);
-
-      statusEl.style.color = "#58a6ff";
-      statusEl.innerText = "Saving rules to cloud DB...";
-
-      try {
-        const res = await fetch('/api/activate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone, amount, planName, utr, rules })
-        });
-        const result = await res.json();
-        statusEl.style.color = result.success ? "#4caf50" : "#ff6b6b";
-        statusEl.innerText = result.message;
-      } catch (err) {
-        statusEl.style.color = "#ff6b6b";
-        statusEl.innerText = "Network error. Please try again.";
-      }
-    }
-
-    async function checkDriverStatus() {
-      const phone = document.getElementById('driverPhone').value.trim();
-      const resultEl = document.getElementById('checkResult');
-
-      if (phone.length !== 10 || isNaN(phone)) {
-        resultEl.style.color = "#ff6b6b";
-        resultEl.innerText = "Please enter your 10-digit mobile number above first.";
-        return;
-      }
-
-      // Save phone to local storage
-      localStorage.setItem('smart_captain_phone', phone);
-
-      resultEl.style.color = "#58a6ff";
-      resultEl.innerText = "Checking cloud status...";
-
-      try {
-        const res = await fetch('/api/driver?phone=' + phone);
-        const data = await res.json();
-
-        if (data.active) {
-          resultEl.style.color = "#4caf50";
-          resultEl.innerText = "Pass Active! Your ride filters are successfully unlocked.";
-          document.getElementById('paymentSection').style.display = "none";
-        } else {
-          resultEl.style.color = "#ff6b6b";
-          resultEl.innerText = data.message || "Still Pending Verification. Please wait for admin approval.";
-        }
-      } catch (err) {
-        resultEl.style.color = "#ff6b6b";
-        resultEl.innerText = "Network error. Please try again.";
-      }
-    }
-  </script>
-</body>
-</html>`;
-
-const server = http.createServer(async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204);
-    return res.end();
-  }
-
-  // 1. Serve Main Dashboard
-  if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    return res.end(htmlPage);
-  }
-
-  // 2. Admin Dashboard (GET /admin)
-  if (req.method === 'GET' && req.url.startsWith('/admin')) {
-    try {
-      const { ok, data: drivers } = await supabaseRequest('drivers?select=*');
-      let rows = '';
-
-      if (ok && Array.isArray(drivers)) {
-        drivers.forEach(d => {
-          const isPending = d.status === 'Pending Verification';
-          rows += `<tr>
-            <td>${d.phone || ''}</td>
-            <td>${d.plan || ''}</td>
-            <td>${d.utr || ''}</td>
-            <td style="color: ${isPending ? '#ff6b6b' : '#4caf50'}; font-weight: bold;">${d.status || 'Active'}</td>
-            <td>${isPending ? `<button onclick="approveDriver('${d.phone}')" style="background:#238636;color:#fff;padding:6px 12px;border:none;border-radius:4px;cursor:pointer;">Approve</button>` : 'Approved'}</td>
-          </tr>`;
-        });
-      }
-
-      const adminPage = `<!DOCTYPE html>
-      <html lang="en">
-      <head>
-        <meta charset="UTF-8">
-        <title>Smart Captain Admin Panel</title>
-        <style>
-          body { background: #0d1017; color: #fff; font-family: Arial, sans-serif; padding: 20px; }
-          h1 { color: #d4af37; font-size: 22px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #161b22; border-radius: 8px; overflow: hidden; }
-          th, td { border: 1px solid #30363d; padding: 12px; text-align: left; font-size: 14px; }
-          th { background: #21262d; color: #f0f6fc; }
-        </style>
-      </head>
-      <body>
-        <h1>Smart Captain — Supabase Admin Panel</h1>
-        <p>Verify UTR numbers from your GPay app, then click approve below:</p>
-        <table>
-          <tr><th>Phone</th><th>Plan</th><th>UTR Number</th><th>Status</th><th>Action</th></tr>
-          ${rows}
-        </table>
-        <script>
-          async function approveDriver(phone) {
-            const res = await fetch('/api/approve?phone=' + phone, { method: 'POST' });
-            const data = await res.json();
-            alert(data.message);
-            location.reload();
-          }
-        </script>
-      </body>
-      </html>`;
-
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(adminPage);
-    } catch (err) {
-      res.writeHead(500, { 'Content-Type': 'text/plain' });
-      return res.end('Database error loading admin panel.');
-    }
-  }
-
-  // 3. API to Approve Driver (POST /api/approve?phone=...)
-  if (req.method === 'POST' && req.url.startsWith('/api/approve')) {
-    const urlObj = new URL(req.url, 'http://' + req.headers.host);
-    const phone = urlObj.searchParams.get('phone');
-
-    if (phone) {
-      const { ok } = await supabaseRequest(
-        `drivers?phone=eq.${encodeURIComponent(phone)}`,
-        'PATCH',
-        { status: 'Active' }
-      );
-
-      if (ok) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ success: true, message: 'Driver approved successfully in Supabase!' }));
-      }
-    }
-
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ success: false, message: 'Failed to approve driver.' }));
-  }
-
-  // 4. Verify GPay UTR & Save Driver Rules to Supabase
-  if (req.method === 'POST' && req.url === '/api/activate') {
-    let body = '';
-    req.on('data', chunk => { body += chunk.toString(); });
-    req.on('end', async () => {
-      try {
-        const { phone, amount, planName, utr, rules } = JSON.parse(body);
-        const isPaidPlan = amount !== "0.00";
-
-        if (isPaidPlan) {
-          const isTwelveDigits = /^\d{12}$/.test(utr);
-          const isFakeRepeated = /^(\d)\1{11}$/.test(utr);
-          if (!isTwelveDigits || isFakeRepeated) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ success: false, message: 'Invalid 12-digit UTR number.' }));
-          }
-
-          // Check if UTR already exists
-          const { ok: utrOk, data: existingUtrs } = await supabaseRequest(
-            `drivers?utr=eq.${encodeURIComponent(utr)}&select=phone,utr`
-          );
-
-          if (utrOk && Array.isArray(existingUtrs) && existingUtrs.length > 0) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ success: false, message: 'This UTR number has already been used!' }));
-          }
-        }
-
-        const driverData = {
-          phone,
-          plan: planName,
-          status: isPaidPlan ? 'Pending Verification' : 'Active',
-          utr: isPaidPlan ? utr : `FREE_${phone}`,
-          rules
-        };
-
-        // Upsert driver into Supabase
-        const { ok, data } = await supabaseRequest(
-          'drivers?on_conflict=phone',
-          'POST',
-          driverData,
-          { 'Prefer': 'resolution=merge-duplicates' }
-        );
-
-        if (!ok) {
-          const errMsg = (data && data.message) ? data.message : 'Supabase error saving driver.';
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ success: false, message: errMsg }));
-        }
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({
-          success: true,
-          message: isPaidPlan
-            ? 'Rules saved to Supabase! Status: Pending admin verification of UTR.'
-            : 'Free Trial Activated! Rules saved to Supabase.'
-        }));
-      } catch (e) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ success: false, message: 'Server error: ' + e.message }));
-      }
-    });
-    return;
-  }
-
-  // 5. Android App Sync Endpoint
-  if (req.method === 'GET' && req.url.startsWith('/api/driver')) {
-    const urlObj = new URL(req.url, 'http://' + req.headers.host);
-    const phone = urlObj.searchParams.get('phone');
-
-    if (!phone) {
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ active: false, message: 'Phone parameter missing.' }));
-    }
-
-    const { ok, data } = await supabaseRequest(
-      `drivers?phone=eq.${encodeURIComponent(phone)}&select=*`
-    );
-
-    if (!ok || !Array.isArray(data) || data.length === 0) {
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ active: false, message: 'Driver not found.' }));
-    }
-
-    const driver = data[0];
-    if (driver.status !== 'Active') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ active: false, message: 'Pass pending payment verification.' }));
-    }
-
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ active: true, rules: driver.rules }));
-  }
-
-  res.writeHead(404, { 'Content-Type': 'text/plain' });
-  res.end('Not Found');
+// Enable CORS for admin panels and app requests
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    next();
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log('SMART CAPTAIN CLOUD SERVER WITH SUPABASE IS LIVE ON PORT ' + PORT);
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+// 1. Admin Panel Route at /admin
+app.get('/admin', async (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <title>Smart Captain Admin Panel</title>
+            <style>
+                body { background: #0B0E14; color: #C9D1D9; font-family: Arial, sans-serif; padding: 20px; }
+                h2 { color: #D29922; }
+                table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #161B22; }
+                th, td { padding: 12px; border: 1px solid #30363D; text-align: left; }
+                th { background: #21262D; color: #8B949E; }
+                button { background: #238636; color: white; border: none; padding: 6px 12px; cursor: pointer; border-radius: 4px; font-weight: bold; }
+                button:hover { background: #2ea043; }
+                .active { color: #3FB950; font-weight: bold; }
+                .pending { color: #D29922; font-weight: bold; }
+            </style>
+        </head>
+        <body>
+            <h2>Smart Captain – Supabase Admin Panel</h2>
+            <p>Verify UTR numbers from your GPay app, then click approve below:</p>
+            <button onclick="loadRequests()">Refresh Payment Requests</button>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Phone</th>
+                        <th>Plan</th>
+                        <th>UTR Number</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody">
+                    <tr><td colspan="5" style="text-align:center;">Loading requests from Supabase...</td></tr>
+                </tbody>
+            </table>
+
+            <script>
+                async function loadRequests() {
+                    try {
+                        const res = await fetch('/api/admin/requests');
+                        const data = await res.json();
+                        const tbody = document.getElementById('tableBody');
+                        tbody.innerHTML = '';
+                        if(data.length === 0) {
+                            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No requests found.</td></tr>';
+                            return;
+                        }
+                        data.forEach(row => {
+                            const tr = document.createElement('tr');
+                            tr.innerHTML = \`
+                                <td>\${row.phone}</td>
+                                <td>\${row.plan || 'N/A'}</td>
+                                <td>\${row.utr || 'N/A'}</td>
+                                <td class="\${row.status === 'Active' ? 'active' : 'pending'}">\${row.status}</td>
+                                <td>\${row.status === 'Active' ? 'Approved' : \`<button onclick="approve('\${row.phone}')">Approve</button>\`}</td>
+                            \`;
+                            tbody.appendChild(tr);
+                        });
+                    } catch(e) {
+                        console.error(e);
+                    }
+                }
+
+                async function approve(phone) {
+                    const res = await fetch('/api/admin/approve', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ phone })
+                    });
+                    const result = await res.json();
+                    if(result.success) {
+                        loadRequests();
+                    } else {
+                        alert('Error approving driver');
+                    }
+                }
+
+                loadRequests();
+            </script>
+        </body>
+        </html>
+    `);
+});
+
+// 2. Strict Activation Endpoint called by Android app
+app.post('/api/activate', async (req, res) => {
+    try {
+        const { phone, plan, utr, minTrip, maxPickup, minFare, goTo } = req.body;
+        
+        if (!phone || !utr) {
+            return res.status(400).json({ success: false, error: 'Missing required fields: phone or utr' });
+        }
+
+        const { data, error } = await supabase
+            .from('drivers')
+            .upsert([
+                {
+                    phone,
+                    plan: plan || '1 Day Pass (₹9)',
+                    utr,
+                    status: 'Pending',
+                    min_trip: minTrip || '',
+                    max_pickup: maxPickup || '',
+                    min_fare: minFare || '',
+                    go_to: goTo || ''
+                }
+            ], { onConflict: ['phone'] });
+
+        if (error) {
+            console.error('Supabase Error:', error);
+            return res.status(500).json({ success: false, error: error.message });
+        }
+
+        res.status(200).json({ success: true, message: 'Activation request saved securely in database' });
+    } catch (err) {
+        console.error('Server Exception:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 3. Endpoint for Admin Panel to fetch all driver requests
+app.get('/api/admin/requests', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('drivers')
+            .select('*')
+            .order('phone', { ascending: false });
+
+        if (error) throw error;
+        res.status(200).json(data);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 4. Endpoint for Admin Panel to approve a driver pass
+app.post('/api/admin/approve', async (req, res) => {
+    try {
+        const { phone } = req.body;
+        const { data, error } = await supabase
+            .from('drivers')
+            .update({ status: 'Active' })
+            .eq('phone', phone);
+
+        if (error) throw error;
+        res.status(200).json({ success: true, message: `Driver ${phone} approved!` });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
 });
