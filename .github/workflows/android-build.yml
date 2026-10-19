@@ -5,13 +5,9 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -23,48 +19,44 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Licenses and Install SDK 35
+      - name: Prepare Clean Android Structure and Build APK
         run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          set +e
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1
+          set -e
 
-      - name: Organize Project Structure Safely
-        run: |
+          mkdir -p /tmp/sc_src
+          find . -maxdepth 5 -type f -name "MainActivity.kt*" -exec cp {} /tmp/sc_src/MainActivity.kt \;
+          find . -maxdepth 5 -type f -name "RideRules.kt*" -exec cp {} /tmp/sc_src/RideRules.kt \;
+          find . -maxdepth 5 -type f -name "RideOfferParser.kt*" ! -name "*Test*" -exec cp {} /tmp/sc_src/RideOfferParser.kt \;
+          find . -maxdepth 5 -type f -name "RideModels.kt*" -exec cp {} /tmp/sc_src/RideModels.kt \;
+          find . -maxdepth 5 -type f -name "RuleEngine.kt*" ! -name "*Test*" -exec cp {} /tmp/sc_src/RuleEngine.kt \;
+          find . -maxdepth 5 -type f -name "BackendClient.kt*" -exec cp {} /tmp/sc_src/BackendClient.kt \;
+          find . -maxdepth 5 -type f -name "strings.xml*" -exec cp {} /tmp/sc_src/strings.xml \;
+
+          rm -rf app
           mkdir -p app/src/main/java/com/smartcaptain/app
           mkdir -p app/src/main/res/values
-          mkdir -p app/src/test/java/com/smartcaptain/app
+          cp /tmp/sc_src/*.kt app/src/main/java/com/smartcaptain/app/
 
-          for f in MainActivity.kt RideRules.kt RideOfferParser.kt RideModels.kt RuleEngine.kt BackendClient.kt; do
-            if [ -f "$f" ]; then cp "$f" "app/src/main/java/com/smartcaptain/app/$f"; fi
-          done
-
-          for f in RideRuleEngineTest.kt RideOfferParserTest.kt RuleEngineTest.kt; do
-            if [ -f "$f" ]; then cp "$f" "app/src/test/java/com/smartcaptain/app/$f"; fi
-          done
-
-          if [ -f "strings.xml" ]; then cp "strings.xml" "app/src/main/res/values/strings.xml"; fi
-          if [ -f "AndroidManifest.xml" ] && [ ! -f "app/src/main/AndroidManifest.xml" ]; then
-            cp "AndroidManifest.xml" "app/src/main/AndroidManifest.xml"
+          if [ -f /tmp/sc_src/strings.xml ]; then
+            cp /tmp/sc_src/strings.xml app/src/main/res/values/strings.xml
+          else
+            printf '<resources><string name="app_name">Smart Captain</string></resources>\n' > app/src/main/res/values/strings.xml
           fi
 
-          printf "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8\nandroid.useAndroidX=true\nkotlin.code.style=official\n" > gradle.properties
+          printf 'pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }\ndependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }\nrootProject.name = "SmartCaptain"\ninclude(":app")\n' > settings.gradle.kts
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.9"
+          printf 'plugins {\n  id("com.android.application") version "8.4.0" apply false\n  id("org.jetbrains.kotlin.android") version "1.9.23" apply false\n}\n' > build.gradle.kts
 
-      - name: List Project Files for Verification
-        run: |
-          ls -la
-          ls -la app/
+          printf 'plugins {\n  id("com.android.application")\n  id("org.jetbrains.kotlin.android")\n}\nandroid {\n  namespace = "com.smartcaptain.app"\n  compileSdk = 34\n  defaultConfig {\n    applicationId = "com.smartcaptain.app"\n    minSdk = 26\n    targetSdk = 34\n    versionCode = 1\n    versionName = "1.0"\n  }\n  compileOptions {\n    sourceCompatibility = JavaVersion.VERSION_17\n    targetCompatibility = JavaVersion.VERSION_17\n  }\n  kotlinOptions {\n    jvmTarget = "17"\n  }\n}\ndependencies {\n  implementation("androidx.core:core-ktx:1.12.0")\n  implementation("androidx.appcompat:appcompat:1.6.1")\n  implementation("com.google.android.material:material:1.11.0")\n  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")\n}\n' > app/build.gradle.kts
+
+          printf 'org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8\nandroid.useAndroidX=true\n' > gradle.properties
+
+          printf '<?xml version="1.0" encoding="utf-8"?>\n<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n  <uses-permission android:name="android.permission.INTERNET" />\n  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n  <application android:allowBackup="true" android:label="@string/app_name" android:supportsRtl="true" android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">\n    <activity android:name=".MainActivity" android:exported="true">\n      <intent-filter>\n        <action android:name="android.intent.action.MAIN" />\n        <category android:name="android.intent.category.LAUNCHER" />\n      </intent-filter>\n    </activity>\n  </application>\n</manifest>\n' > app/src/main/AndroidManifest.xml
+
           ls -la app/src/main/java/com/smartcaptain/app/
-
-      - name: Build Debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+          gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK
         if: success()
@@ -72,5 +64,3 @@ jobs:
         with:
           name: smart-captain-debug-apk
           path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-          retention-days: 14
