@@ -1,5 +1,3 @@
 <resources>
     <string name="app_name">Smart Captain</string>
-    <string name="accessibility_service_label">Smart Captain Ride Automation</string>
-    <string name="accessibility_description">With your consent, reads visible ride-offer text in driver apps you configure. If auto-accept is enabled, your cloud pass is active, and visible offer details match your rules, it may tap a clearly labelled Accept control. Screen text stays on this device and is not uploaded by this app.</string>
 </resources>
